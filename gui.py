@@ -1,186 +1,128 @@
-import sys
+import dearpygui.dearpygui as dpg
 import os
-from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-                             QLabel, QLineEdit, QComboBox, QPushButton, QFileDialog,
-                             QTextEdit, QSpinBox, QMessageBox)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
-
-# Import your existing script functions
+import threading
+import queue
+import time
 from contextforge import compile_project
+import tkinter as tk
+from tkinter import filedialog
 
-class CompileThread(QThread):
-    update_signal = pyqtSignal(str)
-    finished_signal = pyqtSignal(bool, str)
+dpg.create_context()
 
-    def __init__(self, project_path, output_file, output_format, max_file_size):
-        QThread.__init__(self)
-        self.project_path = project_path
-        self.output_file = output_file
-        self.output_format = output_format
-        self.max_file_size = max_file_size
+# Create a queue for thread-safe communication
+message_queue = queue.Queue()
 
-    def run(self):
-        try:
-            # Redirect print statements to update_signal
-            def custom_print(*args, **kwargs):
-                self.update_signal.emit(' '.join(map(str, args)))
+# Flag to control the update thread
+running = True
 
-            # Replace the built-in print function with our custom one
-            import builtins
-            original_print = builtins.print
-            builtins.print = custom_print
+def browse_project(sender, app_data, user_data):
+    root = tk.Tk()
+    root.withdraw()
+    folder_path = filedialog.askdirectory()
+    if folder_path:
+        dpg.set_value("project_path", folder_path)
+        update_full_path()
 
-            self.update_signal.emit("Starting compile_project function...")
-            compile_project(self.project_path, self.output_file, self.output_format, self.max_file_size)
-            self.update_signal.emit("compile_project function completed.")
-            self.finished_signal.emit(True, "Compilation completed successfully.")
-        except Exception as e:
-            import traceback
-            error_msg = f"Error: {str(e)}\n\nTraceback:\n{traceback.format_exc()}"
-            self.update_signal.emit(error_msg)
-            self.finished_signal.emit(False, error_msg)
-        finally:
-            # Restore the original print function
-            builtins.print = original_print
+def browse_output(sender, app_data, user_data):
+    root = tk.Tk()
+    root.withdraw()
+    file_path = filedialog.asksaveasfilename(defaultextension=".txt")
+    if file_path:
+        dpg.set_value("output_file", file_path)
+        update_full_path()
 
-class ContextForgeGUI(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self.initUI()
-
-    def initUI(self):
-        self.setWindowTitle('ContextForge GUI')
-        self.setGeometry(100, 100, 600, 400)
-
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
-
-        # Project Path
-        path_layout = QHBoxLayout()
-        path_layout.addWidget(QLabel('Project Path:'))
-        self.path_input = QLineEdit()
-        path_layout.addWidget(self.path_input)
-        browse_button = QPushButton('Browse')
-        browse_button.clicked.connect(self.browse_project)
-        path_layout.addWidget(browse_button)
-        layout.addLayout(path_layout)
-
-        # Output File
-        output_layout = QHBoxLayout()
-        output_layout.addWidget(QLabel('Output File:'))
-        self.output_input = QLineEdit()
-        output_layout.addWidget(self.output_input)
-        output_browse_button = QPushButton('Browse')
-        output_browse_button.clicked.connect(self.browse_output)
-        output_layout.addWidget(output_browse_button)
-        layout.addLayout(output_layout)
-
-        # Full Path Display
-        self.full_path_label = QLabel()
-        layout.addWidget(self.full_path_label)
-
-        # Output Format
-        format_layout = QHBoxLayout()
-        format_layout.addWidget(QLabel('Output Format:'))
-        self.format_combo = QComboBox()
-        self.format_combo.addItems(['markdown', 'html', 'json', 'xml'])
-        format_layout.addWidget(self.format_combo)
-        layout.addLayout(format_layout)
-
-        # Max File Size
-        size_layout = QHBoxLayout()
-        size_layout.addWidget(QLabel('Max File Size (bytes):'))
-        self.size_input = QSpinBox()
-        self.size_input.setRange(1, 1000000000)
-        self.size_input.setValue(1000000)
-        size_layout.addWidget(self.size_input)
-        layout.addLayout(size_layout)
-
-        # Buttons
-        button_layout = QHBoxLayout()
-        compile_button = QPushButton('Compile Project')
-        compile_button.clicked.connect(self.compile_project)
-        button_layout.addWidget(compile_button)
-        
-        clear_button = QPushButton('Clear Output')
-        clear_button.clicked.connect(self.clear_output)
-        button_layout.addWidget(clear_button)
-        
-        layout.addLayout(button_layout)
-
-        # Output Text
-        self.output_text = QTextEdit()
-        self.output_text.setReadOnly(True)
-        layout.addWidget(self.output_text)
-
-        # Connect signals
-        self.path_input.textChanged.connect(self.update_full_path)
-        self.output_input.textChanged.connect(self.update_full_path)
-
-    def browse_project(self):
-        folder = QFileDialog.getExistingDirectory(self, "Select Project Folder")
-        if folder:
-            self.path_input.setText(folder)
-
-    def browse_output(self):
-        file, _ = QFileDialog.getSaveFileName(self, "Save Output File")
-        if file:
-            self.output_input.setText(file)
-
-    def update_full_path(self):
-        project_path = self.path_input.text()
-        output_file = self.output_input.text()
-        if project_path and output_file:
-            if not os.path.isabs(output_file):
-                full_path = os.path.join(project_path, output_file)
-            else:
-                full_path = output_file
-            self.full_path_label.setText(f'Full path: {full_path}')
+def update_full_path():
+    project_path = dpg.get_value("project_path")
+    output_file = dpg.get_value("output_file")
+    if project_path and output_file:
+        if not os.path.isabs(output_file):
+            full_path = os.path.join(project_path, output_file)
         else:
-            self.full_path_label.setText('')
+            full_path = output_file
+        dpg.set_value("full_path", f'Full path: {full_path}')
+    else:
+        dpg.set_value("full_path", '')
 
-    def compile_project(self):
-        project_path = self.path_input.text()
-        output_file = self.output_input.text()
-        output_format = self.format_combo.currentText()
-        max_file_size = self.size_input.value()
+def compile_project_thread(project_path, output_file, output_format, max_file_size):
+    try:
+        message_queue.put("Starting compilation...\n")
+        message_queue.put(f"Project Path: {project_path}\n")
+        message_queue.put(f"Output File: {output_file}\n")
+        message_queue.put(f"Output Format: {output_format}\n")
+        message_queue.put(f"Max File Size: {max_file_size} bytes\n")
 
-        if not project_path:
-            QMessageBox.warning(self, "Error", "Please specify a project path.")
-            return
+        compile_project(project_path, output_file, output_format, max_file_size)
+        
+        message_queue.put("Compilation completed successfully.")
+    except Exception as e:
+        message_queue.put(f"Compilation failed: {str(e)}")
 
-        self.output_text.clear()
-        self.output_text.append(f"Starting compilation...\n")
-        self.output_text.append(f"Project Path: {project_path}\n")
-        self.output_text.append(f"Output File: {output_file}\n")
-        self.output_text.append(f"Output Format: {output_format}\n")
-        self.output_text.append(f"Max File Size: {max_file_size} bytes\n")
+def compile_project_callback(sender, app_data, user_data):
+    project_path = dpg.get_value("project_path")
+    output_file = dpg.get_value("output_file")
+    output_format = dpg.get_value("output_format")
+    max_file_size = dpg.get_value("max_file_size")
 
-        try:
-            self.compile_thread = CompileThread(project_path, output_file, output_format, max_file_size)
-            self.compile_thread.update_signal.connect(self.update_output)
-            self.compile_thread.finished_signal.connect(self.compilation_finished)
-            self.compile_thread.start()
-            self.output_text.append("Compilation thread started.\n")
-        except Exception as e:
-            self.output_text.append(f"Error starting compilation thread: {str(e)}\n")
-            QMessageBox.critical(self, "Error", f"Failed to start compilation: {str(e)}")
+    if not project_path:
+        dpg.set_value("output", "Error: Please specify a project path.")
+        return
 
-    def update_output(self, message):
-        self.output_text.append(message)
+    dpg.set_value("output", "")  # Clear output
+    threading.Thread(target=compile_project_thread, args=(project_path, output_file, output_format, max_file_size)).start()
 
-    def compilation_finished(self, success, message):
-        if success:
-            self.output_text.append(message)
-        else:
-            self.output_text.append(f"Compilation failed: {message}")
+def clear_output(sender, app_data, user_data):
+    dpg.set_value("output", "")
 
-    def clear_output(self):
-        self.output_text.clear()
+def update_output_thread():
+    while running:
+        if not message_queue.empty():
+            messages = []
+            while not message_queue.empty():
+                messages.append(message_queue.get_nowait())
+            
+            # Update GUI in the main thread
+            dpg.run_in_main_thread(update_gui, messages)
+        time.sleep(0.1)  # Sleep to prevent high CPU usage
 
-if __name__ == '__main__':
-    app = QApplication(sys.argv)
-    ex = ContextForgeGUI()
-    ex.show()
-    sys.exit(app.exec_())
+def update_gui(messages):
+    current_text = dpg.get_value("output")
+    for message in messages:
+        current_text += message + "\n"
+    dpg.set_value("output", current_text)
+
+with dpg.window(label="ContextForge GUI", tag="primary_window"):
+    with dpg.group(horizontal=True):
+        dpg.add_input_text(label="Project Path", tag="project_path", width=300)
+        dpg.add_button(label="Browse", callback=browse_project)
+    
+    with dpg.group(horizontal=True):
+        dpg.add_input_text(label="Output File", tag="output_file", width=300)
+        dpg.add_button(label="Browse", callback=browse_output)
+    
+    dpg.add_text(tag="full_path")
+    
+    dpg.add_combo(label="Output Format", items=['markdown', 'html', 'json', 'xml'], default_value='markdown', tag="output_format")
+    dpg.add_input_int(label="Max File Size (bytes)", default_value=1000000, tag="max_file_size")
+    
+    with dpg.group(horizontal=True):
+        dpg.add_button(label="Compile Project", callback=compile_project_callback)
+        dpg.add_button(label="Clear Output", callback=clear_output)
+    
+    dpg.add_input_text(multiline=True, readonly=True, tag="output", height=200, width=-1)
+
+# Start the update thread
+update_thread = threading.Thread(target=update_output_thread, daemon=True)
+update_thread.start()
+
+dpg.create_viewport(title='ContextForge GUI', width=600, height=400)
+dpg.setup_dearpygui()
+dpg.set_primary_window("primary_window", True)
+
+dpg.show_viewport()
+dpg.start_dearpygui()
+
+# Signal the update thread to stop
+running = False
+update_thread.join()
+
+dpg.destroy_context()
